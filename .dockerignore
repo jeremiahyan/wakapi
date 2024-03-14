@@ -13,3 +13,4 @@ testing/
 coverage/
 
 .idea
+.vscode
