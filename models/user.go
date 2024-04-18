@@ -3,6 +3,7 @@ package models
 import (
 	"crypto/md5"
 	"fmt"
+	"github.com/dchest/captcha"
 	conf "github.com/muety/wakapi/config"
 	"github.com/muety/wakapi/utils"
 	"regexp"
@@ -54,6 +55,8 @@ type Signup struct {
 	Password       string `schema:"password"`
 	PasswordRepeat string `schema:"password_repeat"`
 	Location       string `schema:"location"`
+	CaptchaId      string `schema:"captcha_id"`
+	Captcha        string `schema:"captcha"`
 	InviteCode     string `schema:"invite_code"`
 	InvitedBy      string `schema:"-"`
 }
@@ -182,9 +185,11 @@ func (c *SetPasswordRequest) IsValid() bool {
 }
 
 func (s *Signup) IsValid() bool {
+	config := conf.Get()
 	return ValidateUsername(s.Username) &&
 		ValidateEmail(s.Email) &&
 		ValidatePassword(s.Password) &&
+		(!config.Security.SignupCaptcha || ValidateCaptcha(s.CaptchaId, s.Captcha)) &&
 		s.Password == s.PasswordRepeat
 }
 
@@ -198,6 +203,10 @@ func ValidateUsername(username string) bool {
 
 func ValidatePassword(password string) bool {
 	return len(password) >= 6
+}
+
+func ValidateCaptcha(captchaId, captchaValue string) bool {
+	return captcha.VerifyString(captchaId, captchaValue)
 }
 
 // ValidateEmail checks that, if an email address is given, it has proper syntax and (if not in dev mode) an MX record exists for the domain
