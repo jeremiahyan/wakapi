@@ -4,6 +4,7 @@ type LoginViewModel struct {
 	SharedViewModel
 	TotalUsers  int
 	AllowSignup bool
+	CaptchaId   string
 	InviteCode  string
 }
 
