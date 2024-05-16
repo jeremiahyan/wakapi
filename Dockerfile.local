@@ -6,7 +6,7 @@ ADD ./scripts/wait-for-it.sh ./
 RUN chmod +x wait-for-it.sh
 
 ADD ./go.mod ./go.sum ./
-RUN go env -w GOPROXY=https://goproxy.cn,https://gocenter.io,https://goproxy.io,direct
+RUN go env -w GOPROXY=https://goproxy.io,direct
 RUN go mod download && go mod verify
 ADD . .
 
