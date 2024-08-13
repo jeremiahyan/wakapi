@@ -14,12 +14,12 @@ import (
 	"github.com/duke-git/lancet/v2/slice"
 
 	"github.com/emvi/logbuch"
+	"github.com/gofrs/uuid/v5"
 	"github.com/gorilla/securecookie"
 	"github.com/jinzhu/configor"
 	"github.com/muety/wakapi/data"
 	"github.com/muety/wakapi/utils"
 	"github.com/robfig/cron/v3"
-	uuid "github.com/satori/go.uuid"
 )
 
 const (
@@ -179,11 +179,12 @@ type mailConfig struct {
 }
 
 type SMTPMailConfig struct {
-	Host     string `env:"WAKAPI_MAIL_SMTP_HOST"`
-	Port     uint   `env:"WAKAPI_MAIL_SMTP_PORT"`
-	Username string `env:"WAKAPI_MAIL_SMTP_USER"`
-	Password string `env:"WAKAPI_MAIL_SMTP_PASS"`
-	TLS      bool   `env:"WAKAPI_MAIL_SMTP_TLS"`
+	Host       string `env:"WAKAPI_MAIL_SMTP_HOST"`
+	Port       uint   `env:"WAKAPI_MAIL_SMTP_PORT"`
+	Username   string `env:"WAKAPI_MAIL_SMTP_USER"`
+	Password   string `env:"WAKAPI_MAIL_SMTP_PASS"`
+	TLS        bool   `env:"WAKAPI_MAIL_SMTP_TLS"`
+	SkipVerify bool   `env:"WAKAPI_MAIL_SMTP_SKIP_VERIFY"`
 }
 
 type Config struct {
@@ -465,7 +466,7 @@ func Load(configFlag string, version string) *Config {
 		config.Version = "v" + config.Version
 	}
 
-	config.InstanceId = uuid.NewV4().String()
+	config.InstanceId = uuid.Must(uuid.NewV4()).String()
 	config.App.Colors = readColors()
 	config.Db.Dialect = resolveDbDialect(config.Db.Type)
 
