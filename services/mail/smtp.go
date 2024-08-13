@@ -1,6 +1,7 @@
 package mail
 
 import (
+	"crypto/tls"
 	"errors"
 	"github.com/emersion/go-sasl"
 	"github.com/emersion/go-smtp"
@@ -31,7 +32,7 @@ func (s *SMTPSendingService) Send(mail *models.Mail) error {
 	dial := smtp.Dial
 	if s.config.TLS {
 		dial = func(addr string) (*smtp.Client, error) {
-			return smtp.DialTLS(addr, nil)
+			return smtp.DialTLS(addr, &tls.Config{InsecureSkipVerify: s.config.SkipVerify})
 		}
 	}
 
@@ -39,19 +40,31 @@ func (s *SMTPSendingService) Send(mail *models.Mail) error {
 	if err != nil {
 		return err
 	}
-
 	defer c.Close()
 
+	// if server offers starttls, automatically switch to starttls instead
+	// for backwards-compatibility, we switch to starttls even if forced tls was requested
+	// TODO: actually use forced tls if requested
 	if ok, _ := c.Extension("STARTTLS"); ok {
-		if err = c.StartTLS(nil); err != nil {
-			errCode := err.(*smtp.SMTPError).Code
-			if errCode == 503 {
-				// TLS already active
+		cNew, err := smtp.DialStartTLS(s.config.ConnStr(), &tls.Config{InsecureSkipVerify: s.config.SkipVerify})
+
+		if err != nil {
+			if errSmtp, ok := err.(*smtp.SMTPError); ok {
+				if errSmtp.Code == 503 {
+					// TLS already active
+				}
+				return err
 			} else {
 				return err
 			}
 		}
+
+		// swap old client with new one
+		c.Close()
+		c = cNew
+		defer c.Close()
 	}
+
 	if s.auth != nil {
 		if ok, _ := c.Extension("AUTH"); !ok {
 			return errors.New("smtp: server doesn't support AUTH")
@@ -65,25 +78,31 @@ func (s *SMTPSendingService) Send(mail *models.Mail) error {
 			return err
 		}
 	}
+
 	if err = c.Mail(mail.From.Raw(), nil); err != nil {
 		return err
 	}
+
 	for _, addr := range mail.To.RawStrings() {
 		if err = c.Rcpt(addr, nil); err != nil {
 			return err
 		}
 	}
+
 	w, err := c.Data()
 	if err != nil {
 		return err
 	}
+
 	_, err = io.Copy(w, mail.Reader())
 	if err != nil {
 		return err
 	}
+
 	err = w.Close()
 	if err != nil {
 		return err
 	}
+
 	return c.Quit()
 }
