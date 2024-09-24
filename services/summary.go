@@ -2,14 +2,16 @@ package services
 
 import (
 	"errors"
+	"github.com/becheran/wildmatch-go"
 	"github.com/duke-git/lancet/v2/datetime"
-	"github.com/emvi/logbuch"
+	"github.com/duke-git/lancet/v2/slice"
 	"github.com/leandro-lugaresi/hub"
 	"github.com/muety/wakapi/config"
 	"github.com/muety/wakapi/models"
 	"github.com/muety/wakapi/models/types"
 	"github.com/muety/wakapi/repositories"
 	"github.com/patrickmn/go-cache"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -20,17 +22,19 @@ type SummaryService struct {
 	cache               *cache.Cache
 	eventBus            *hub.Hub
 	repository          repositories.ISummaryRepository
+	heartbeatService    IHeartbeatService
 	durationService     IDurationService
 	aliasService        IAliasService
 	projectLabelService IProjectLabelService
 }
 
-func NewSummaryService(summaryRepo repositories.ISummaryRepository, durationService IDurationService, aliasService IAliasService, projectLabelService IProjectLabelService) *SummaryService {
+func NewSummaryService(summaryRepo repositories.ISummaryRepository, heartbeatService IHeartbeatService, durationService IDurationService, aliasService IAliasService, projectLabelService IProjectLabelService) *SummaryService {
 	srv := &SummaryService{
 		config:              config.Get(),
 		cache:               cache.New(24*time.Hour, 24*time.Hour),
 		eventBus:            config.EventBus(),
 		repository:          summaryRepo,
+		heartbeatService:    heartbeatService,
 		durationService:     durationService,
 		aliasService:        aliasService,
 		projectLabelService: projectLabelService,
@@ -273,7 +277,7 @@ func (srv *SummaryService) withProjectLabels(summary *models.Summary) *models.Su
 
 	allLabels, err := srv.projectLabelService.GetByUser(summary.UserID)
 	if err != nil {
-		config.Log().Error("failed to retrieve project labels for user summary ('%s', '%s', '%s')", summary.UserID, summary.FromTime.String(), summary.ToTime.String())
+		config.Log().Error("failed to retrieve project labels for user summary", "userID", summary.UserID, "fromTime", summary.FromTime.String(), "toTime", summary.ToTime.String())
 		return summary
 	}
 
@@ -293,7 +297,7 @@ func (srv *SummaryService) withProjectLabels(summary *models.Summary) *models.Su
 			totalLabelTime += p.Total
 		}
 	}
-	//labelMap[models.DefaultProjectLabel] = newEntry(models.DefaultProjectLabel, summary.TotalTimeBy(models.SummaryProject) / time.Second-totalLabelTime)
+	// labelMap[models.DefaultProjectLabel] = newEntry(models.DefaultProjectLabel, summary.TotalTimeBy(models.SummaryProject) / time.Second-totalLabelTime)
 
 	labels := make([]*models.SummaryItem, 0, len(labelMap))
 	for _, v := range labelMap {
@@ -335,13 +339,13 @@ func (srv *SummaryService) mergeSummaries(summaries []*models.Summary) (*models.
 	for i, s := range summaries {
 		hash := s.FromTime.T()
 		if _, found := processed[hash]; found {
-			logbuch.Warn("summary from %v to %v (user '%s') was attempted to be processed more often than once", s.FromTime, s.ToTime, s.UserID)
+			slog.Warn("summary was attempted to be processed more often than once", "fromTime", s.FromTime, "toTime", s.ToTime, "userID", s.UserID)
 			continue
 		}
 
 		if i > 0 {
 			if prev := summaries[i-1]; s.FromTime.T().Before(prev.ToTime.T()) {
-				logbuch.Warn("got overlapping summaries (ids %d, %d) for user '%s' from %v (current.from) to %v (previous.to)", prev.ID, s.ID, s.UserID, s.FromTime, prev.ToTime)
+				slog.Warn("got overlapping summaries for user", "prevID", prev.ID, "currentID", s.ID, "userID", s.UserID, "fromTime", s.FromTime, "prevToTime", prev.ToTime)
 			}
 		}
 
@@ -481,11 +485,36 @@ func (srv *SummaryService) getAliasReverseResolver(user *models.User) models.Ali
 	return func(t uint8, k string) []string {
 		aliases, err := srv.aliasService.GetByUserAndKeyAndType(user.ID, k, t)
 		if err != nil {
+			config.Log().Error("failed to fetch aliases for user", "user", user.ID, "error", err)
 			aliases = []*models.Alias{}
 		}
+
+		projects, err := srv.heartbeatService.GetEntitySetByUser(models.SummaryProject, user.ID)
+		if err != nil {
+			config.Log().Error("failed to fetch projects for alias resolution for user", "user", user.ID, "error", err)
+		}
+
+		isWildcard := func(alias string) bool {
+			return strings.Contains(alias, "*") || strings.Contains(alias, "?")
+		}
+
+		// for wildcard patterns like "anchr-" (e.g. resolving to "anchr-mobile", "anchr-web", ...), we need to fetch all projects matching the pattern
+		// this is mainly used for the filtering functionality
+		// proper way would be to make the filters support wildcards as well instead
+		matchProjects := func(aliasWildcard string) []string {
+			pattern := wildmatch.NewWildMatch(aliasWildcard)
+			return slice.Filter[string](projects, func(i int, project string) bool {
+				return pattern.IsMatch(project)
+			})
+		}
+
 		aliasStrings := make([]string, 0, len(aliases))
 		for _, a := range aliases {
-			aliasStrings = append(aliasStrings, a.Value)
+			if isWildcard(a.Value) {
+				aliasStrings = append(aliasStrings, matchProjects(a.Value)...)
+			} else {
+				aliasStrings = append(aliasStrings, a.Value)
+			}
 		}
 		return aliasStrings
 	}

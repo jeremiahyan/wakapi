@@ -1,102 +1,69 @@
 package config
 
 import (
-	"github.com/emvi/logbuch"
 	"github.com/getsentry/sentry-go"
-	"io"
+	slogmulti "github.com/samber/slog-multi"
+	slogsentry "github.com/samber/slog-sentry/v2"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 // How to: Logging
-// Use logbuch.[Debug|Info|Warn|Error|Fatal]() by default
+// Use slog.[Debug|Info|Warn|Error|Fatal]() by default
 // Use config.Log().[Debug|Info|Warn|Error|Fatal]() when wanting the log to appear in Sentry as well
 
-type capturingWriter struct {
-	Writer  io.Writer
-	Message string
+// SentryLogger wraps slog.Logger and provides a Fatal method
+type SentryLogger struct {
+	*slog.Logger
 }
 
-func (c *capturingWriter) Clear() {
-	c.Message = ""
-}
+var sentryLogger *SentryLogger
 
-func (c *capturingWriter) Write(p []byte) (n int, err error) {
-	c.Message = string(p)
-	return c.Writer.Write(p)
-}
-
-// SentryWrapperLogger is a wrapper around a logbuch.Logger that forwards events to Sentry in addition and optionally allows to attach a request context
-type SentryWrapperLogger struct {
-	*logbuch.Logger
-	req       *http.Request
-	outWriter *capturingWriter
-	errWriter *capturingWriter
-}
-
-func Log() *SentryWrapperLogger {
-	ow, ew := &capturingWriter{Writer: os.Stdout}, &capturingWriter{Writer: os.Stderr}
-	return &SentryWrapperLogger{
-		Logger:    logbuch.NewLogger(ow, ew),
-		outWriter: ow,
-		errWriter: ew,
+func Log() *SentryLogger {
+	if sentryLogger != nil {
+		return sentryLogger
 	}
-}
 
-func (l *SentryWrapperLogger) Request(req *http.Request) *SentryWrapperLogger {
-	l.req = req
-	return l
-}
+	level := slog.LevelInfo
+	if Get().IsDev() {
+		level = slog.LevelDebug
+	}
 
-func (l *SentryWrapperLogger) Debug(msg string, params ...interface{}) {
-	l.outWriter.Clear()
-	l.Logger.Debug(msg, params...)
-	l.log(l.errWriter.Message, sentry.LevelDebug)
-}
-
-func (l *SentryWrapperLogger) Info(msg string, params ...interface{}) {
-	l.outWriter.Clear()
-	l.Logger.Info(msg, params...)
-	l.log(l.errWriter.Message, sentry.LevelInfo)
-}
-
-func (l *SentryWrapperLogger) Warn(msg string, params ...interface{}) {
-	l.outWriter.Clear()
-	l.Logger.Warn(msg, params...)
-	l.log(l.errWriter.Message, sentry.LevelWarning)
-}
-
-func (l *SentryWrapperLogger) Error(msg string, params ...interface{}) {
-	l.errWriter.Clear()
-	l.Logger.Error(msg, params...)
-	l.log(l.errWriter.Message, sentry.LevelError)
-}
-
-func (l *SentryWrapperLogger) Fatal(msg string, params ...interface{}) {
-	l.errWriter.Clear()
-	l.Logger.Fatal(msg, params...)
-	l.log(l.errWriter.Message, sentry.LevelFatal)
-}
-
-func (l *SentryWrapperLogger) log(msg string, level sentry.Level) {
-	event := sentry.NewEvent()
-	event.Level = level
-	event.Message = msg
-
-	if l.req != nil {
-		if h := l.req.Context().Value(sentry.HubContextKey); h != nil {
-			hub := h.(*sentry.Hub)
-			hub.Scope().SetRequest(l.req)
-			if uid := getPrincipal(l.req); uid != "" {
-				hub.Scope().SetUser(sentry.User{ID: uid})
+	filterRequestInfo := slogmulti.NewWithAttrsInlineMiddleware(func(attrs []slog.Attr, next func([]slog.Attr) slog.Handler) slog.Handler {
+		attrsNew := []slog.Attr{}
+		for _, attr := range attrs {
+			if attr.Key != "request" {
+				attrsNew = append(attrsNew, attr)
 			}
-			hub.CaptureEvent(event)
-			return
 		}
-	}
+		return next(attrsNew)
+	})
 
-	sentry.CaptureEvent(event)
+	sentryLogger = &SentryLogger{Logger: slog.New(
+		slogmulti.Fanout(
+			slogmulti.Pipe(filterRequestInfo).Handler(slog.Default().Handler()),
+			slogsentry.Option{Level: level}.NewSentryHandler(),
+		),
+	)}
+
+	return sentryLogger
+}
+
+func (l *SentryLogger) Fatal(msg string, args ...any) {
+	l.Error(msg, args...)
+	sentry.Flush(2 * time.Second)
+	os.Exit(1)
+}
+
+func (l *SentryLogger) Request(r *http.Request) *slog.Logger {
+	l.Logger = l.Logger.With("request", r)
+	if uid := getPrincipal(r); uid != "" {
+		l.Logger = l.Logger.With(slog.Group("user", slog.String("id", uid)))
+	}
+	return l.Logger
 }
 
 var excludedRoutes = []string{
@@ -106,10 +73,12 @@ var excludedRoutes = []string{
 	"GET /docs",
 }
 
-func initSentry(config sentryConfig, debug bool) {
+func initSentry(config sentryConfig, debug bool, releaseVersion string) {
 	if err := sentry.Init(sentry.ClientOptions{
 		Dsn:              config.Dsn,
 		Debug:            debug,
+		Environment:      config.Environment,
+		Release:          releaseVersion,
 		AttachStacktrace: true,
 		EnableTracing:    config.EnableTracing,
 		TracesSampler: func(ctx sentry.SamplingContext) float64 {
@@ -125,17 +94,11 @@ func initSentry(config sentryConfig, debug bool) {
 			return float64(config.SampleRate)
 		},
 		BeforeSend: func(event *sentry.Event, hint *sentry.EventHint) *sentry.Event {
-			if hint.Context != nil {
-				if req, ok := hint.Context.Value(sentry.RequestContextKey).(*http.Request); ok {
-					if uid := getPrincipal(req); uid != "" {
-						event.User.ID = uid
-					}
-				}
-			}
+			// optional pre-processing before sending the event off
 			return event
 		},
 	}); err != nil {
-		logbuch.Fatal("failed to initialized sentry - %v", err)
+		Log().Fatal("failed to initialized sentry", "error", err)
 	}
 }
 

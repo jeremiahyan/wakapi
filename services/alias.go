@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"github.com/becheran/wildmatch-go"
 	datastructure "github.com/duke-git/lancet/v2/datastructure/set"
 	"github.com/muety/wakapi/config"
 	"github.com/muety/wakapi/models"
@@ -41,7 +42,7 @@ func (srv *AliasService) InitializeUser(userId string) error {
 
 func (srv *AliasService) MayInitializeUser(userId string) {
 	if err := srv.InitializeUser(userId); err != nil {
-		config.Log().Error("failed to initialize user alias map for user %s", userId)
+		config.Log().Error("failed to initialize user alias map", "userID", userId)
 	}
 }
 
@@ -75,9 +76,13 @@ func (srv *AliasService) GetAliasOrDefault(userId string, summaryType uint8, val
 		srv.MayInitializeUser(userId)
 	}
 
+	match := func(aliasValue string, itemKey string) bool {
+		return wildmatch.NewWildMatch(aliasValue).IsMatch(itemKey)
+	}
+
 	if aliases, ok := userAliases.Load(userId); ok {
 		for _, a := range aliases.([]*models.Alias) {
-			if a.Type == summaryType && a.Value == value {
+			if a.Type == summaryType && match(a.Value, value) {
 				return a.Key, nil
 			}
 		}

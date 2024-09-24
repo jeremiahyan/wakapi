@@ -3,7 +3,6 @@ package api
 import (
 	"errors"
 	"github.com/alitto/pond"
-	"github.com/emvi/logbuch"
 	"github.com/go-chi/chi/v5"
 	conf "github.com/muety/wakapi/config"
 	"github.com/muety/wakapi/helpers"
@@ -14,6 +13,7 @@ import (
 	"github.com/muety/wakapi/repositories"
 	"github.com/muety/wakapi/services"
 	"github.com/muety/wakapi/utils"
+	"log/slog"
 	"net/http"
 	"runtime"
 	"sort"
@@ -87,7 +87,7 @@ func (h *MetricsHandler) RegisterRoutes(router chi.Router) {
 		return
 	}
 
-	logbuch.Info("exposing prometheus metrics under /api/metrics")
+	slog.Info("exposing prometheus metrics under /api/metrics")
 
 	r := chi.NewRouter()
 	r.Use(middlewares.NewAuthenticateMiddleware(h.userSrvc).Handler)
@@ -107,7 +107,7 @@ func (h *MetricsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	var metrics mm.Metrics
 
 	if userMetrics, err := h.getUserMetrics(reqUser); err != nil {
-		conf.Log().Request(r).Error("%v", err)
+		conf.Log().Request(r).Error("error occurred", "error", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(conf.ErrInternalServerError))
 		return
@@ -119,7 +119,7 @@ func (h *MetricsHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 	if reqUser.IsAdmin {
 		if adminMetrics, err := h.getAdminMetrics(reqUser); err != nil {
-			conf.Log().Request(r).Error("%v", err)
+			conf.Log().Request(r).Error("error occurred", "error", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(conf.ErrInternalServerError))
 			return
@@ -141,7 +141,7 @@ func (h *MetricsHandler) getUserMetrics(user *models.User) (*mm.Metrics, error) 
 
 	summaryAllTime, err := h.summarySrvc.Aliased(time.Time{}, time.Now(), user, h.summarySrvc.Retrieve, nil, false)
 	if err != nil {
-		conf.Log().Error("failed to retrieve all time summary for user '%s' for metric", user.ID)
+		conf.Log().Error("failed to retrieve all time summary for metric", "userID", user.ID, "error", err)
 		return nil, err
 	}
 
@@ -149,13 +149,13 @@ func (h *MetricsHandler) getUserMetrics(user *models.User) (*mm.Metrics, error) 
 
 	summaryToday, err := h.summarySrvc.Aliased(from, to, user, h.summarySrvc.Retrieve, nil, false)
 	if err != nil {
-		conf.Log().Error("failed to retrieve today's summary for user '%s' for metric", user.ID)
+		conf.Log().Error("failed to retrieve today's summary for metric", "userID", user.ID, "error", err)
 		return nil, err
 	}
 
 	heartbeatCount, err := h.heartbeatSrvc.CountByUser(user)
 	if err != nil {
-		conf.Log().Error("failed to count heartbeats for user '%s' for metric", user.ID)
+		conf.Log().Error("failed to count heartbeats for metric", "userID", user.ID, "error", err)
 		return nil, err
 	}
 
@@ -163,7 +163,7 @@ func (h *MetricsHandler) getUserMetrics(user *models.User) (*mm.Metrics, error) 
 	if h.config.App.LeaderboardEnabled {
 		leaderboard, err = h.leaderboardSrvc.GetByIntervalAndUser(h.leaderboardSrvc.GetDefaultScope(), user.ID, false)
 		if err != nil {
-			conf.Log().Error("failed to fetch leaderboard for user '%s' for metric", user.ID)
+			conf.Log().Error("failed to fetch leaderboard for metric", "userID", user.ID, "error", err)
 			return nil, err
 		}
 	}
@@ -349,7 +349,7 @@ func (h *MetricsHandler) getUserMetrics(user *models.User) (*mm.Metrics, error) 
 	// Database metrics
 	dbSize, err := h.metricsRepo.GetDatabaseSize()
 	if err != nil {
-		logbuch.Warn("failed to get database size (%v)", err)
+		slog.Warn("failed to get database size", "error", err)
 	}
 
 	metrics = append(metrics, &mm.GaugeMetric{
@@ -383,7 +383,7 @@ func (h *MetricsHandler) getAdminMetrics(user *models.User) (*mm.Metrics, error)
 	var metrics mm.Metrics
 
 	t0 := time.Now()
-	logbuch.Debug("[metrics] start admin metrics calculation")
+	slog.Debug("start admin metrics calculation")
 
 	if !user.IsAdmin {
 		return nil, errors.New("unauthorized")
@@ -398,14 +398,14 @@ func (h *MetricsHandler) getAdminMetrics(user *models.User) (*mm.Metrics, error)
 
 	totalUsers, _ := h.userSrvc.Count()
 	totalHeartbeats, _ := h.heartbeatSrvc.Count(true)
-	logbuch.Debug("[metrics] finished counting users and heartbeats after %v", time.Now().Sub(t0))
+	slog.Debug("finished counting users and heartbeats", "duration", time.Since(t0))
 
 	activeUsers, err := h.userSrvc.GetActive(false)
 	if err != nil {
-		conf.Log().Error("failed to retrieve active users for metric - %v", err)
+		conf.Log().Error("failed to retrieve active users for metric", "error", err)
 		return nil, err
 	}
-	logbuch.Debug("[metrics] finished getting active users after %v", time.Now().Sub(t0))
+	slog.Debug("finished getting active users", "duration", time.Since(t0))
 
 	metrics = append(metrics, &mm.GaugeMetric{
 		Name:   MetricsPrefix + "_admin_seconds_total",
@@ -439,7 +439,7 @@ func (h *MetricsHandler) getAdminMetrics(user *models.User) (*mm.Metrics, error)
 
 	userCounts, err := h.heartbeatSrvc.CountByUsers(activeUsers)
 	if err != nil {
-		conf.Log().Error("failed to count heartbeats for active users", err.Error())
+		conf.Log().Error("failed to count heartbeats for active users", "error", err.Error())
 		return nil, err
 	}
 
@@ -451,7 +451,7 @@ func (h *MetricsHandler) getAdminMetrics(user *models.User) (*mm.Metrics, error)
 			Labels: []mm.Label{{Key: "user", Value: uc.User}},
 		})
 	}
-	logbuch.Debug("[metrics] finished counting heartbeats by user after %v", time.Now().Sub(t0))
+	slog.Debug("finished counting heartbeats by user", "duration", time.Since(t0))
 
 	// Get per-user total activity
 
@@ -465,7 +465,7 @@ func (h *MetricsHandler) getAdminMetrics(user *models.User) (*mm.Metrics, error)
 		wp.Submit(func() {
 			summary, err := h.summarySrvc.Aliased(from, to, activeUsers[i], h.summarySrvc.Retrieve, nil, false) // only using aliased because aliased has caching
 			if err != nil {
-				conf.Log().Error("failed to get total time for user '%s' as part of metrics, %v", activeUsers[i].ID, err)
+				conf.Log().Error("failed to get total time for user as part of metrics", "userID", activeUsers[i].ID, "error", err)
 				return
 			}
 			lock.Lock()
@@ -480,7 +480,7 @@ func (h *MetricsHandler) getAdminMetrics(user *models.User) (*mm.Metrics, error)
 	}
 
 	wp.StopAndWait()
-	logbuch.Debug("[metrics] finished retrieving total activity time by user after %v", time.Now().Sub(t0))
+	slog.Debug("finished retrieving total activity time by user", "duration", time.Since(t0))
 
 	return &metrics, nil
 }

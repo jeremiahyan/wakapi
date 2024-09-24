@@ -1,6 +1,7 @@
 package middlewares
 
 // Borrowed from https://gist.github.com/elithrar/887d162dfd0c539b700ab4049c76e22b
+// Alternatively, we could use https://github.com/samber/slog-chi, however, it pulls in another bunch of dependencies and log messages are more verbose and feel almost little bloated
 
 import (
 	"io"
@@ -42,15 +43,14 @@ func (lg *LoggingMiddleware) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	lg.logFunc(
-		"[request] status=%d, method=%s, uri=%s, duration=%v, bytes=%d, addr=%s, user=%s",
-		ww.Status(),
-		r.Method,
-		r.URL.String(),
-		duration,
-		ww.BytesWritten(),
-		readUserIP(r),
-		readUserID(r),
+	lg.logFunc("[request]",
+		"status", ww.Status(),
+		"method", r.Method,
+		"uri", r.URL.String(),
+		"duration", duration,
+		"bytes", ww.BytesWritten(),
+		"addr", readUserIP(r),
+		"user", readUserID(r),
 	)
 }
 
