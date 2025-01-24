@@ -88,7 +88,7 @@ $ docker run -d \
 
 **Note:** By default, SQLite is used as a database. To run Wakapi in Docker with MySQL or Postgres, see [Dockerfile](https://github.com/muety/wakapi/blob/master/Dockerfile) and [config.default.yml](https://github.com/muety/wakapi/blob/master/config.default.yml) for further options.
 
-If you want to run Wakapi on **Kubernetes**, there is [wakapi-helm-chart](https://github.com/andreymaznyak/wakapi-helm-chart) for quick and easy deployment.
+If you want to run Wakapi on **Kubernetes**, there is [wakapi-helm-chart](https://github.com/ricristian/wakapi-helm-chart) for quick and easy deployment.
 
 #### Docker Compose
 Alternatively, you can use Docker Compose for an even more straightforward deployment. See [compose.yml](https://github.com/muety/wakapi/blob/master/compose.yml) for configuration details.
@@ -159,6 +159,7 @@ argument) or via environment variables. Here is an overview of all options.
 | `app.leaderboard_enabled` /<br>`WAKAPI_LEADERBOARD_ENABLED`                  | `true`                                           | Whether to enable the public leaderboard                                                                                                                                        |
 | `app.leaderboard_scope` /<br>`WAKAPI_LEADERBOARD_SCOPE`                      | `7_days`                                         | Aggregation interval for public leaderboard (see [here](https://github.com/muety/wakapi/blob/7d156cd3edeb93af2997bd95f12933b0aabef0c9/config/config.go#L71) for allowed values) |
 | `app.leaderboard_generation_time` /<br>`WAKAPI_LEADERBOARD_GENERATION_TIME`  | `0 0 6 * * *,0 0 18 * * *`                       | One or multiple times of day at which to re-calculate the leaderboard                                                                                                           |
+| `app.leaderboard_require_auth` /<br>`WAKAPI_LEADERBOARD_REQUIRE_AUTH`        | `false`                                          | Restrict leaderboard access to logged in users only                                                                                                                             |
 | `app.aggregation_time` /<br>`WAKAPI_AGGREGATION_TIME`                        | `0 15 2 * * *`                                   | Time of day at which to periodically run summary generation for all users                                                                                                       |
 | `app.report_time_weekly` /<br>`WAKAPI_REPORT_TIME_WEEKLY`                    | `0 0 18 * * 5`                                   | Week day and time at which to send e-mail reports                                                                                                                               |
 | `app.data_cleanup_time` /<br>`WAKAPI_DATA_CLEANUP_TIME`                      | `0 0 6 * * 0`                                    | When to perform data cleanup operations (see `app.data_retention_months`)                                                                                                       |
@@ -168,6 +169,7 @@ argument) or via environment variables. Here is an overview of all options.
 | `app.import_max_rate` /<br>`WAKAPI_IMPORT_MAX_RATE`                          | `24`                                             | Minimum number of hours to wait after a successful data import before user may attempt another one                                                                              |
 | `app.inactive_days` /<br>`WAKAPI_INACTIVE_DAYS`                              | `7`                                              | Number of days after which to consider a user inactive (only for metrics)                                                                                                       |
 | `app.heartbeat_max_age /`<br>`WAKAPI_HEARTBEAT_MAX_AGE`                      | `4320h`                                          | Maximum acceptable age of a heartbeat (see [`ParseDuration`](https://pkg.go.dev/time#ParseDuration))                                                                            |
+| `app.warm_caches /`<br>`WAKAPI_WARM_CACHES`                                  | `true`                                           | Whether to perform some initial cache warming upon startup                                                                                                                      |
 | `app.custom_languages`                                                       | -                                                | Map from file endings to language names                                                                                                                                         |
 | `app.avatar_url_template` /<br>`WAKAPI_AVATAR_URL_TEMPLATE`                  | (see [`config.default.yml`](config.default.yml)) | URL template for external user avatar images (e.g. from [Dicebear](https://dicebear.com) or [Gravatar](https://gravatar.com))                                                   |
 | `app.date_format` /<br>`WAKAPI_DATE_FORMAT`                                  | `Mon, 02 Jan 2006`                               | Go time format strings to format human-readable date (see [`Time.Format`](https://pkg.go.dev/time#Time.Format))                                                                 |
@@ -321,8 +323,6 @@ Wakapi also integrates
 with [GitHub Readme Stats](https://github.com/anuraghazra/github-readme-stats#wakatime-week-stats) to generate fancy
 cards for you. Here is an example. To use this, don't forget to **enable public data**
 under [Settings -> Permissions](https://wakapi.dev/settings#permissions).
-
-![](https://github-readme-stats.vercel.app/api/wakatime?username=n1try&api_domain=wakapi.dev&bg_color=2D3748&title_color=2F855A&icon_color=2F855A&text_color=ffffff&custom_title=Wakapi%20Week%20Stats&layout=compact&range=last_7_days)
 
 <details>
 <summary>Click to view code</summary>

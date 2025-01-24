@@ -83,6 +83,7 @@ type appConfig struct {
 	LeaderboardEnabled        bool                         `yaml:"leaderboard_enabled" default:"true" env:"WAKAPI_LEADERBOARD_ENABLED"`
 	LeaderboardScope          string                       `yaml:"leaderboard_scope" default:"7_days" env:"WAKAPI_LEADERBOARD_SCOPE"`
 	LeaderboardGenerationTime string                       `yaml:"leaderboard_generation_time" default:"0 0 6 * * *,0 0 18 * * *" env:"WAKAPI_LEADERBOARD_GENERATION_TIME"`
+	LeaderboardRequireAuth    bool                         `yaml:"leaderboard_require_auth" default:"false" env:"WAKAPI_LEADERBOARD_REQUIRE_AUTH"`
 	AggregationTime           string                       `yaml:"aggregation_time" default:"0 15 2 * * *" env:"WAKAPI_AGGREGATION_TIME"`
 	ReportTimeWeekly          string                       `yaml:"report_time_weekly" default:"0 0 18 * * 5" env:"WAKAPI_REPORT_TIME_WEEKLY"`
 	DataCleanupTime           string                       `yaml:"data_cleanup_time" default:"0 0 6 * * 0" env:"WAKAPI_DATA_CLEANUP_TIME"`
@@ -96,6 +97,7 @@ type appConfig struct {
 	DataRetentionMonths       int                          `yaml:"data_retention_months" default:"-1" env:"WAKAPI_DATA_RETENTION_MONTHS"`
 	DataCleanupDryRun         bool                         `yaml:"data_cleanup_dry_run" default:"false" env:"WAKAPI_DATA_CLEANUP_DRY_RUN"` // for debugging only
 	MaxInactiveMonths         int                          `yaml:"max_inactive_months" default:"-1" env:"WAKAPI_MAX_INACTIVE_MONTHS"`
+	WarmCaches                bool                         `yaml:"warm_caches" default:"true" env:"WAKAPI_WARM_CACHES"`
 	AvatarURLTemplate         string                       `yaml:"avatar_url_template" default:"api/avatar/{username_hash}.svg" env:"WAKAPI_AVATAR_URL_TEMPLATE"`
 	SupportContact            string                       `yaml:"support_contact" default:"hostmaster@wakapi.dev" env:"WAKAPI_SUPPORT_CONTACT"`
 	DateFormat                string                       `yaml:"date_format" default:"Mon, 02 Jan 2006" env:"WAKAPI_DATE_FORMAT"`
