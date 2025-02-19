@@ -15,6 +15,7 @@ const labelsCanvas = document.getElementById('chart-label')
 const branchesCanvas = document.getElementById('chart-branches')
 const entitiesCanvas = document.getElementById('chart-entities')
 const categoriesCanvas = document.getElementById('chart-categories')
+const dailyCanvas = document.getElementById('chart-daily-projects')
 
 const projectContainer = document.getElementById('project-container')
 const osContainer = document.getElementById('os-container')
@@ -25,10 +26,11 @@ const labelContainer = document.getElementById('label-container')
 const branchContainer = document.getElementById('branch-container')
 const entityContainer = document.getElementById('entity-container')
 const categoryContainer = document.getElementById('category-container')
+const dailyContainer = document.getElementById('daily-container')
 
-const containers = [projectContainer, osContainer, editorContainer, languageContainer, machineContainer, labelContainer, branchContainer, entityContainer, categoryContainer]
-const canvases = [projectsCanvas, osCanvas, editorsCanvas, languagesCanvas, machinesCanvas, labelsCanvas, branchesCanvas, entitiesCanvas, categoriesCanvas]
-const data = [wakapiData.projects, wakapiData.operatingSystems, wakapiData.editors, wakapiData.languages, wakapiData.machines, wakapiData.labels, wakapiData.branches, wakapiData.entities, wakapiData.categories]
+const containers = [projectContainer, osContainer, editorContainer, languageContainer, machineContainer, labelContainer, branchContainer, entityContainer, categoryContainer, dailyContainer]
+const canvases = [projectsCanvas, osCanvas, editorsCanvas, languagesCanvas, machinesCanvas, labelsCanvas, branchesCanvas, entitiesCanvas, categoriesCanvas, dailyCanvas]
+const data = [wakapiData.projects, wakapiData.operatingSystems, wakapiData.editors, wakapiData.languages, wakapiData.machines, wakapiData.labels, wakapiData.branches, wakapiData.entities, wakapiData.categories, wakapiData.dailyStats]
 
 let topNPickers = [...document.getElementsByClassName('top-picker')]
 topNPickers.sort(((a, b) => parseInt(a.attributes['data-entity'].value) - parseInt(b.attributes['data-entity'].value)))
@@ -63,6 +65,13 @@ String.prototype.toHHMMSS = function () {
     return `${hours}:${minutes}:${seconds}`
 }
 
+function filterLegendItem(item) {
+    if (!item || !item.text) return false;
+    item.text = item.text.length > LEGEND_CHARACTERS ? item.text.slice(0, LEGEND_CHARACTERS - 3).padEnd(LEGEND_CHARACTERS, '.') : item.text
+    item.text = item.text.padEnd(LEGEND_CHARACTERS + 3)
+    return true
+}
+
 function draw(subselection) {
     function getTooltipOptions(key, stacked) {
         return {
@@ -77,12 +86,6 @@ function draw(subselection) {
                 footer: () => key === 'projects' ? 'Click for details' : null
             }
         }
-    }
-
-    function filterLegendItem(item) {
-        item.text = item.text.length > LEGEND_CHARACTERS ? item.text.slice(0, LEGEND_CHARACTERS - 3).padEnd(LEGEND_CHARACTERS, '.') : item.text
-        item.text = item.text.padEnd(LEGEND_CHARACTERS + 3)
-        return true
     }
 
     function shouldUpdate(index) {
@@ -102,7 +105,7 @@ function draw(subselection) {
             data: {
                 datasets: [{
                     data: wakapiData.projects
-                    .slice(0, Math.min(showTopN[0], wakapiData.projects.length))
+                        .slice(0, Math.min(showTopN[0], wakapiData.projects.length))
                         .map(p => parseInt(p.total)),
                     backgroundColor: wakapiData.projects.map((p, i) => {
                         const c = hexToRgb(vibrantColors ? getRandomColor(p.key) : getColor(p.key, i % baseColors.length))
@@ -455,7 +458,7 @@ function draw(subselection) {
                             callback: (label) => label.toString().toHHMMSS(),
                         },
                         stacked: true,
-                        max: wakapiData.categories.map(c => c.total).reduce((a, b) => a+b, 0)
+                        max: wakapiData.categories.map(c => c.total).reduce((a, b) => a + b, 0)
                     },
                     y: {
                         stacked: true,
@@ -470,6 +473,63 @@ function draw(subselection) {
         })
         : null
 
+    let dailyChart = dailyCanvas && !dailyCanvas.classList.contains('hidden') && shouldUpdate(9)
+        ? new Chart(dailyCanvas.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: wakapiData.dailyStats.map(day => new Date(day.date).toLocaleDateString()),
+                datasets: wakapiData.dailyStats
+                    .flatMap(day => day.projects.map(project => project.name))
+                    .sort()
+                    .filter((value, index, self) => self.indexOf(value) === index)
+                    .map((project, i) => ({
+                        label: project,
+                        data: wakapiData.dailyStats.map(day => day.projects.reduce((acc, p) => p.name === project ? acc + p.duration : acc, 0)),
+                        backgroundColor: vibrantColors ? getRandomColor(project) : getColor(project, i % baseColors.length),
+                        barPercentage: 1.0
+                    }))
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        stacked: true,
+                        title: {
+                            display: true,
+                            text: 'Date'
+                        }
+                    },
+                    y: {
+                        stacked: true,
+                        title: {
+                            display: true,
+                            text: 'Duration (hh:mm:ss)'
+                        },
+                        ticks: {
+                            callback: value => value.toString().toHHMMSS()
+                        }
+                    }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            label: (context) => {
+                                return `${context.dataset.label}: ${context.raw.toString().toHHMMSS()}`
+                            }
+                        }
+                    },
+                    legend: {
+                        position: 'right',
+                        labels: {
+                            filter: filterLegendItem
+                        }
+                    }
+                }
+            }
+        })
+        : null
+
     charts[0] = projectChart ? projectChart : charts[0]
     charts[1] = osChart ? osChart : charts[1]
     charts[2] = editorChart ? editorChart : charts[2]
@@ -479,6 +539,7 @@ function draw(subselection) {
     charts[6] = branchChart ? branchChart : charts[6]
     charts[7] = entityChart ? entityChart : charts[7]
     charts[8] = categoryChart ? categoryChart : charts[8]
+    charts[9] = dailyChart ? dailyChart : charts[9]
 }
 
 function parseTopN() {
@@ -503,7 +564,7 @@ function togglePlaceholders(mask) {
 }
 
 function getPresentDataMask() {
-    return data.map(list => (list ? list.reduce((acc, e) => acc + e.total, 0) : 0) > 0)
+    return data.map(list => (list ? list.reduce((acc, e) => acc + (e.total ? e.total : (e.projects ? e.projects.reduce((acc, f) => acc + f.duration, 0) : 0)), 0) : 0) > 0)
 }
 
 function getColor(seed, index) {
@@ -547,7 +608,10 @@ function extractFile(filePath) {
 }
 
 function updateNumTotal() {
-    for (let i = 0; i < data.length; i++) {
+    // Why length - 1:
+    //  We don't have a 'topN' for the DailyProjectStats
+    //  So there isn't a input for it.
+    for (let i = 0; i < data.length - 1; i++) {
         document.querySelector(`span[data-entity='${i}']`).innerText = data[i].length.toString()
     }
 }

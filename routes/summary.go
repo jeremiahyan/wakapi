@@ -2,6 +2,9 @@ package routes
 
 import (
 	"fmt"
+	"net/http"
+	"time"
+
 	"github.com/go-chi/chi/v5"
 	conf "github.com/muety/wakapi/config"
 	"github.com/muety/wakapi/helpers"
@@ -10,8 +13,12 @@ import (
 	"github.com/muety/wakapi/models/view"
 	su "github.com/muety/wakapi/routes/utils"
 	"github.com/muety/wakapi/services"
-	"net/http"
-	"time"
+	"github.com/muety/wakapi/utils"
+)
+
+const (
+	dailyStatsMinRangeDays = 3
+	dailyStatsMaxRangeDays = 31
 )
 
 type SummaryHandler struct {
@@ -86,6 +93,16 @@ func (h *SummaryHandler) GetIndex(w http.ResponseWriter, r *http.Request) {
 		firstData, _ = time.Parse(time.RFC822Z, firstDataKv.Value)
 	}
 
+	var dailyStats []*view.DailyProjectsViewModel
+	if rangeDays := summaryParams.RangeDays(); rangeDays >= dailyStatsMinRangeDays && rangeDays <= dailyStatsMaxRangeDays {
+		dailyStatsSummaries, err := h.fetchSplitSummaries(summaryParams)
+		if err != nil {
+			conf.Log().Request(r).Error("failed to load daily stats", "error", err)
+		} else {
+			dailyStats = view.NewDailyProjectStats(dailyStatsSummaries)
+		}
+	}
+
 	vm := view.SummaryViewModel{
 		SharedLoggedInViewModel: view.SharedLoggedInViewModel{
 			SharedViewModel: view.NewSharedViewModel(h.config, nil),
@@ -100,6 +117,7 @@ func (h *SummaryHandler) GetIndex(w http.ResponseWriter, r *http.Request) {
 		RawQuery:            rawQuery,
 		UserFirstData:       firstData,
 		DataRetentionMonths: h.config.App.DataRetentionMonths,
+		DailyStats:          dailyStats,
 	}
 
 	templates[conf.SummaryTemplate].Execute(w, vm)
@@ -111,4 +129,17 @@ func (h *SummaryHandler) buildViewModel(r *http.Request, w http.ResponseWriter) 
 			SharedViewModel: view.NewSharedViewModel(h.config, nil),
 		},
 	}, r, w)
+}
+
+func (h *SummaryHandler) fetchSplitSummaries(params *models.SummaryParams) ([]*models.Summary, error) {
+	summaries := make([]*models.Summary, 0)
+	intervals := utils.SplitRangeByDays(params.From, params.To)
+	for _, interval := range intervals {
+		curSummary, err := h.summarySrvc.Aliased(interval[0], interval[1], params.User, h.summarySrvc.Retrieve, params.Filters, false)
+		if err != nil {
+			return nil, err
+		}
+		summaries = append(summaries, curSummary)
+	}
+	return summaries, nil
 }
