@@ -34,6 +34,8 @@ type IHeartbeatRepository interface {
 	GetLastByUsers() ([]*models.TimeByUser, error)
 	GetLatestByUser(*models.User) (*models.Heartbeat, error)
 	GetLatestByOriginAndUser(string, *models.User) (*models.Heartbeat, error)
+	StreamAllWithin(time.Time, time.Time, *models.User) (chan *models.Heartbeat, error)
+	StreamAllWithinByFilters(time.Time, time.Time, *models.User, map[string][]string) (chan *models.Heartbeat, error)
 	Count(bool) (int64, error)
 	CountByUser(*models.User) (int64, error)
 	CountByUsers([]*models.User) ([]*models.CountByUser, error)
@@ -42,6 +44,16 @@ type IHeartbeatRepository interface {
 	DeleteByUser(*models.User) error
 	DeleteByUserBefore(*models.User, time.Time) error
 	GetUserProjectStats(*models.User, time.Time, time.Time, int, int) ([]*models.ProjectStats, error)
+}
+
+type IDurationRepository interface {
+	IBaseRepository
+	InsertBatch([]*models.Duration) error
+	GetAllWithin(time.Time, time.Time, *models.User) ([]*models.Duration, error)
+	GetAllWithinByFilters(time.Time, time.Time, *models.User, map[string][]string) ([]*models.Duration, error)
+	GetLatestByUser(*models.User) (*models.Duration, error)
+	DeleteByUser(*models.User) error
+	DeleteByUserBefore(*models.User, time.Time) error
 }
 
 type IDiagnosticsRepository interface {

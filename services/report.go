@@ -53,7 +53,7 @@ func (srv *ReportService) Schedule() {
 			t0 := time.Now()
 
 			if err := srv.SendReport(u, reportRange); err != nil {
-				config.Log().Error("failed to generate report", "userID", u.ID, "error", err)
+				config.Log().Error("failed to regenerate report", "userID", u.ID, "error", err)
 			}
 
 			// make the job take at least reportDelay seconds
@@ -102,21 +102,21 @@ func (srv *ReportService) SendReport(user *models.User, duration time.Duration) 
 	end := time.Now().In(user.TZ())
 	start := time.Now().Add(-1 * duration)
 
-	fullSummary, err := srv.summaryService.Aliased(start, end, user, srv.summaryService.Retrieve, nil, false)
+	fullSummary, err := srv.summaryService.Aliased(start, end, user, srv.summaryService.Retrieve, nil, nil, false)
 	if err != nil {
-		config.Log().Error("failed to generate report", "userID", user.ID, "error", err)
+		config.Log().Error("failed to regenerate report", "userID", user.ID, "error", err)
 		return err
 	}
 
-	// generate per-day summaries
+	// regenerate per-day summaries
 	dayIntervals := utils.SplitRangeByDays(start, end)
 	dailySummaries := make([]*models.Summary, len(dayIntervals))
 
 	for i, interval := range dayIntervals {
 		from, to := datetime.BeginOfDay(interval[0]), interval[1]
-		summary, err := srv.summaryService.Aliased(from, to, user, srv.summaryService.Retrieve, nil, false)
+		summary, err := srv.summaryService.Aliased(from, to, user, srv.summaryService.Retrieve, nil, nil, false)
 		if err != nil {
-			config.Log().Error("failed to generate day summary for report", "from", from, "to", to, "userID", user.ID, "error", err)
+			config.Log().Error("failed to regenerate day summary for report", "from", from, "to", to, "userID", user.ID, "error", err)
 			break
 		}
 		summary.FromTime = models.CustomTime(from)

@@ -2,16 +2,21 @@ package models
 
 import (
 	"fmt"
-	"github.com/mitchellh/hashstructure/v2"
+	"github.com/cespare/xxhash/v2"
+	"github.com/gohugoio/hashstructure"
+	"github.com/muety/wakapi/models/lib"
 	"log/slog"
+	"strings"
 	"time"
 	"unicode"
 )
 
+// TODO: support multiple durations per time per user for different heartbeat timeouts
+// see discussion at https://github.com/muety/wakapi/issues/675
 type Duration struct {
-	UserID          string        `json:"user_id"`
-	Time            CustomTime    `json:"time" hash:"ignore"`
-	Duration        time.Duration `json:"duration" hash:"ignore"`
+	UserID          string        `json:"user_id" gorm:"not null; index:idx_time_duration_user"`
+	Time            CustomTime    `json:"time" hash:"ignore" gorm:"not null; index:idx_time_duration_user"` // time of first heartbeat of this duration
+	Duration        time.Duration `json:"duration" hash:"ignore" gorm:"not null"`
 	Project         string        `json:"project"`
 	Language        string        `json:"language"`
 	Editor          string        `json:"editor"`
@@ -21,8 +26,13 @@ type Duration struct {
 	Branch          string        `json:"branch"`
 	Entity          string        `json:"Entity"`
 	NumHeartbeats   int           `json:"-" hash:"ignore"`
-	GroupHash       string        `json:"-" hash:"ignore"`
+	GroupHash       string        `json:"-" hash:"ignore" gorm:"type:varchar(17)"`
+	Timeout         time.Duration `json:"-" gorm:"not null; default:600000000000"` // heartbeat timeout preference, see DefaultHeartbeatsTimeout
 	excludeEntity   bool          `json:"-" hash:"ignore"`
+}
+
+func (d *Duration) TimeEnd() time.Time {
+	return d.Time.T().Add(d.Duration)
 }
 
 func (d *Duration) HashInclude(field string, v interface{}) (bool, error) {
@@ -33,6 +43,8 @@ func (d *Duration) HashInclude(field string, v interface{}) (bool, error) {
 		field == "Duration" ||
 		field == "NumHeartbeats" ||
 		field == "GroupHash" ||
+		field == "ID" ||
+		field == "Timeout" ||
 		unicode.IsLower(rune(field[0])) {
 		return false, nil
 	}
@@ -40,6 +52,11 @@ func (d *Duration) HashInclude(field string, v interface{}) (bool, error) {
 }
 
 func NewDurationFromHeartbeat(h *Heartbeat) *Duration {
+	var interval = DefaultHeartbeatsTimeout
+	if h.User != nil && h.User.HeartbeatsTimeout() > 0 {
+		interval = h.User.HeartbeatsTimeout()
+	}
+
 	d := &Duration{
 		UserID:          h.UserID,
 		Time:            h.Time,
@@ -53,8 +70,9 @@ func NewDurationFromHeartbeat(h *Heartbeat) *Duration {
 		Branch:          h.Branch,
 		Entity:          h.Entity,
 		NumHeartbeats:   1,
+		Timeout:         interval,
 	}
-	return d.Hashed()
+	return d
 }
 
 func (d *Duration) WithEntityIgnored() *Duration {
@@ -62,12 +80,30 @@ func (d *Duration) WithEntityIgnored() *Duration {
 	return d
 }
 
+func (d *Duration) WithTimeout(interval time.Duration) *Duration {
+	d.Timeout = interval
+	return d
+}
+
 func (d *Duration) Hashed() *Duration {
-	hash, err := hashstructure.Hash(d, hashstructure.FormatV2, nil)
+	hash, err := hashstructure.Hash(d, &hashstructure.HashOptions{Hasher: xxhash.New()})
 	if err != nil {
 		slog.Error("CRITICAL ERROR: failed to hash struct", "error", err)
 	}
 	d.GroupHash = fmt.Sprintf("%x", hash)
+	return d
+}
+
+func (d *Duration) Augmented(languageMappings map[string]string) *Duration {
+	for ext, targetLang := range languageMappings {
+		langs, ok := lib.LanguagesByExtension["."+ext]
+		if !ok {
+			continue
+		}
+		if lang := langs[0]; strings.ToLower(d.Language) == strings.ToLower(lang) {
+			d.Language = targetLang
+		}
+	}
 	return d
 }
 

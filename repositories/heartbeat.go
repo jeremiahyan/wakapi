@@ -2,16 +2,12 @@ package repositories
 
 import (
 	"database/sql"
-	"strings"
 	"time"
 
-	"github.com/duke-git/lancet/v2/slice"
 	conf "github.com/muety/wakapi/config"
 	"github.com/muety/wakapi/models"
 	"github.com/muety/wakapi/utils"
-	"gorm.io/driver/sqlserver"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type HeartbeatRepository struct {
@@ -33,31 +29,7 @@ func (r *HeartbeatRepository) GetAll() ([]*models.Heartbeat, error) {
 }
 
 func (r *HeartbeatRepository) InsertBatch(heartbeats []*models.Heartbeat) error {
-
-	// sqlserver on conflict has bug https://github.com/go-gorm/sqlserver/issues/100
-	// As a workaround, insert one by one, and ignore duplicate key error
-	if r.db.Dialector.Name() == (sqlserver.Dialector{}).Name() {
-		for _, h := range heartbeats {
-			err := r.db.Create(h).Error
-			if err != nil {
-				if strings.Contains(err.Error(), "Cannot insert duplicate key row in object 'dbo.heartbeats' with unique index 'idx_heartbeats_hash'") {
-					// ignored
-				} else {
-					return err
-				}
-			}
-		}
-		return nil
-	}
-
-	if err := r.db.
-		Clauses(clause.OnConflict{
-			DoNothing: true,
-		}).
-		Create(&heartbeats).Error; err != nil {
-		return err
-	}
-	return nil
+	return InsertBatchChunked[*models.Heartbeat](heartbeats, &models.Heartbeat{}, r.db)
 }
 
 func (r *HeartbeatRepository) GetLatestByUser(user *models.User) (*models.Heartbeat, error) {
@@ -103,6 +75,28 @@ func (r *HeartbeatRepository) GetAllWithin(from, to time.Time, user *models.User
 	return heartbeats, nil
 }
 
+func (r *HeartbeatRepository) StreamAllWithin(from, to time.Time, user *models.User) (chan *models.Heartbeat, error) {
+	out := make(chan *models.Heartbeat)
+
+	rows, err := r.db.
+		Model(&models.Heartbeat{}).
+		Where(&models.Heartbeat{UserID: user.ID}).
+		Where("time >= ?", from.Local()).
+		Where("time < ?", to.Local()).
+		Order("time asc").
+		Rows()
+
+	if err != nil {
+		return nil, err
+	}
+
+	go streamRows[models.Heartbeat](rows, out, r.db, func(err error) {
+		conf.Log().Error("failed to scan heartbeats row", "user", user.ID, "from", from, "to", to, "error", err)
+	})
+
+	return out, nil
+}
+
 func (r *HeartbeatRepository) GetAllWithinByFilters(from, to time.Time, user *models.User, filterMap map[string][]string) ([]*models.Heartbeat, error) {
 	// https://stackoverflow.com/a/20765152/3112139
 	var heartbeats []*models.Heartbeat
@@ -112,12 +106,34 @@ func (r *HeartbeatRepository) GetAllWithinByFilters(from, to time.Time, user *mo
 		Where("time >= ?", from.Local()).
 		Where("time < ?", to.Local()).
 		Order("time asc")
-	q = r.filteredQuery(q, filterMap)
+	q = filteredQuery(q, filterMap)
 
 	if err := q.Find(&heartbeats).Error; err != nil {
 		return nil, err
 	}
 	return heartbeats, nil
+}
+
+func (r *HeartbeatRepository) StreamAllWithinByFilters(from, to time.Time, user *models.User, filterMap map[string][]string) (chan *models.Heartbeat, error) {
+	out := make(chan *models.Heartbeat)
+
+	q := r.db.
+		Where(&models.Heartbeat{UserID: user.ID}).
+		Where("time >= ?", from.Local()).
+		Where("time < ?", to.Local()).
+		Order("time asc")
+	q = filteredQuery(q, filterMap)
+
+	rows, err := q.Rows()
+	if err != nil {
+		return nil, err
+	}
+
+	go streamRows[models.Heartbeat](rows, out, r.db, func(err error) {
+		conf.Log().Error("failed to scan filtered heartbeats row", "user", user.ID, "from", from, "to", to, "error", err)
+	})
+
+	return out, nil
 }
 
 func (r *HeartbeatRepository) GetLatestByFilters(user *models.User, filterMap map[string][]string) (*models.Heartbeat, error) {
@@ -126,7 +142,7 @@ func (r *HeartbeatRepository) GetLatestByFilters(user *models.User, filterMap ma
 	q := r.db.
 		Where(&models.Heartbeat{UserID: user.ID}).
 		Order("time desc")
-	q = r.filteredQuery(q, filterMap)
+	q = filteredQuery(q, filterMap)
 
 	if err := q.Limit(1).Scan(&heartbeat).Error; err != nil {
 		return nil, err
@@ -319,17 +335,4 @@ func (r *HeartbeatRepository) GetUserProjectStats(user *models.User, from, to ti
 	}
 
 	return projectStats, nil
-}
-
-func (r *HeartbeatRepository) filteredQuery(q *gorm.DB, filterMap map[string][]string) *gorm.DB {
-	for col, vals := range filterMap {
-		q = q.Where(col+" in ?", slice.Map[string, string](vals, func(i int, val string) string {
-			// query for "unknown" projects, languages, etc.
-			if val == "-" {
-				return ""
-			}
-			return val
-		}))
-	}
-	return q
 }

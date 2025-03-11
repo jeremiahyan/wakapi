@@ -11,6 +11,7 @@ import (
 type IAggregationService interface {
 	Schedule()
 	AggregateSummaries(set datastructure.Set[string]) error
+	AggregateDurations(set datastructure.Set[string]) error
 }
 
 type IMiscService interface {
@@ -43,6 +44,8 @@ type IHeartbeatService interface {
 	GetLatestByOriginAndUser(string, *models.User) (*models.Heartbeat, error)
 	GetLatestByFilters(*models.User, *models.Filters) (*models.Heartbeat, error)
 	GetEntitySetByUser(uint8, string) ([]string, error)
+	StreamAllWithin(time.Time, time.Time, *models.User) (chan *models.Heartbeat, error)
+	StreamAllWithinByFilters(time.Time, time.Time, *models.User, *models.Filters) (chan *models.Heartbeat, error)
 	DeleteBefore(time.Time) error
 	DeleteByUser(*models.User) error
 	DeleteByUserBefore(*models.User, time.Time) error
@@ -88,13 +91,15 @@ type IMailService interface {
 }
 
 type IDurationService interface {
-	Get(time.Time, time.Time, *models.User, *models.Filters) (models.Durations, error)
+	Get(time.Time, time.Time, *models.User, *models.Filters, *time.Duration, bool) (models.Durations, error)
+	Regenerate(*models.User, bool)
+	RegenerateAll()
 }
 
 type ISummaryService interface {
-	Aliased(time.Time, time.Time, *models.User, types.SummaryRetriever, *models.Filters, bool) (*models.Summary, error)
-	Retrieve(time.Time, time.Time, *models.User, *models.Filters) (*models.Summary, error)
-	Summarize(time.Time, time.Time, *models.User, *models.Filters) (*models.Summary, error)
+	Aliased(time.Time, time.Time, *models.User, types.SummaryRetriever, *models.Filters, *time.Duration, bool) (*models.Summary, error)
+	Retrieve(time.Time, time.Time, *models.User, *models.Filters, *time.Duration) (*models.Summary, error)
+	Summarize(time.Time, time.Time, *models.User, *models.Filters, *time.Duration) (*models.Summary, error)
 	GetLatestByUser() ([]*models.TimeByUser, error)
 	DeleteByUser(string) error
 	DeleteByUserBefore(string, time.Time) error

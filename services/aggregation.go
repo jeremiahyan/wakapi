@@ -23,17 +23,19 @@ type AggregationService struct {
 	userService      IUserService
 	summaryService   ISummaryService
 	heartbeatService IHeartbeatService
+	durationService  IDurationService
 	inProgress       datastructure.Set[string]
 	queueDefault     *artifex.Dispatcher
 	queueWorkers     *artifex.Dispatcher
 }
 
-func NewAggregationService(userService IUserService, summaryService ISummaryService, heartbeatService IHeartbeatService) *AggregationService {
+func NewAggregationService(userService IUserService, summaryService ISummaryService, heartbeatService IHeartbeatService, durationService IDurationService) *AggregationService {
 	return &AggregationService{
 		config:           config.Get(),
 		userService:      userService,
 		summaryService:   summaryService,
 		heartbeatService: heartbeatService,
+		durationService:  durationService,
 		inProgress:       datastructure.New[string](),
 		queueDefault:     config.GetDefaultQueue(),
 		queueWorkers:     config.GetQueue(config.QueueProcessing),
@@ -52,7 +54,7 @@ func (srv *AggregationService) Schedule() {
 
 	if _, err := srv.queueDefault.DispatchCron(func() {
 		if err := srv.AggregateSummaries(datastructure.New[string]()); err != nil {
-			config.Log().Error("failed to generate summaries", "error", err)
+			config.Log().Error("failed to regenerate summaries", "error", err)
 		}
 	}, srv.config.App.GetAggregationTimeCron()); err != nil {
 		config.Log().Error("failed to schedule summary generation", "error", err)
@@ -65,7 +67,7 @@ func (srv *AggregationService) AggregateSummaries(userIds datastructure.Set[stri
 	}
 	defer srv.unlockUsers(userIds)
 
-	slog.Info("generating summaries")
+	slog.Info("generating summaries", "num_users", len(userIds))
 
 	// Get a map from user ids to the time of their latest summary or nil if none exists yet
 	lastUserSummaryTimes, err := srv.summaryService.GetLatestByUser() // TODO: build user-specific variant of this query for efficiency
@@ -87,20 +89,6 @@ func (srv *AggregationService) AggregateSummaries(userIds datastructure.Set[stri
 		firstUserHeartbeatLookup[e.User] = e.Time
 	}
 
-	// Dispatch summary generation jobs
-	jobs := make(chan *AggregationJob)
-	defer close(jobs)
-	go func() {
-		for jobRef := range jobs {
-			job := *jobRef
-			if err := srv.queueWorkers.Dispatch(func() {
-				srv.process(job)
-			}); err != nil {
-				config.Log().Error("failed to dispatch summary generation job", "userID", job.User.ID)
-			}
-		}
-	}()
-
 	// Fetch complete user objects
 	var users map[string]*models.User
 	if userIds != nil && !userIds.IsEmpty() {
@@ -113,36 +101,87 @@ func (srv *AggregationService) AggregateSummaries(userIds datastructure.Set[stri
 	}
 
 	// Generate summary aggregation jobs
-	for _, e := range lastUserSummaryTimes {
-		if userIds != nil && !userIds.IsEmpty() && !userIds.Contain(e.User) {
-			continue
+	for _, user := range users {
+		u := *user
+		jobs := make([]*AggregationJob, 0)
+
+		// regenerate durations for the user
+		srv.queueWorkers.Dispatch(func() {
+			slog.Info("regenerating user durations as part of summary aggregation", "user", user.ID)
+			srv.durationService.Regenerate(&u, true)
+		})
+
+		// generate actual summary aggregation jobs
+		for _, e := range lastUserSummaryTimes {
+			if e.User != user.ID {
+				continue
+			}
+
+			if e.Time.Valid() {
+				// Case 1: User has aggregated summaries already
+				// -> Spawn jobs to create summaries from their latest aggregation to now
+				slog.Info("generating summary aggregation jobs for user", "user", u.ID, "from", e.Time.T())
+				jobs = append(jobs, generateUserJobs(&u, e.Time.T())...)
+			} else if t := firstUserHeartbeatLookup[e.User]; t.Valid() {
+				// Case 2: User has no aggregated summaries, yet, but has heartbeats
+				// -> Spawn jobs to create summaries from their first heartbeat to now
+				slog.Info("generating summary aggregation jobs for user", "user", u.ID, "from", t.T())
+				jobs = append(jobs, generateUserJobs(&u, t.T())...)
+			} else {
+				// Case 3: User doesn't have heartbeats at all
+				// -> Nothing to do
+				slog.Info("skipping summary aggregation because user has no heartbeats", "user", u.ID)
+			}
 		}
 
-		u, _ := users[e.User]
-
-		if e.Time.Valid() {
-			// Case 1: User has aggregated summaries already
-			// -> Spawn jobs to create summaries from their latest aggregation to now
-			slog.Info("generating summary aggregation jobs for user", "user", u.ID, "from", e.Time.T())
-			generateUserJobs(u, e.Time.T(), jobs)
-		} else if t := firstUserHeartbeatLookup[e.User]; t.Valid() {
-			// Case 2: User has no aggregated summaries, yet, but has heartbeats
-			// -> Spawn jobs to create summaries from their first heartbeat to now
-			slog.Info("generating summary aggregation jobs for user", "user", u.ID, "from", t.T())
-			generateUserJobs(u, t.T(), jobs)
-		} else {
-			// Case 3: User doesn't have heartbeats at all
-			// -> Nothing to do
-			slog.Info("skipping summary aggregation because user has no heartbeats", "user", u.ID)
+		// dispatch the jobs for current user
+		for _, jobRef := range jobs {
+			job := *jobRef
+			if err := srv.queueWorkers.Dispatch(func() {
+				srv.process(job)
+			}); err != nil {
+				config.Log().Error("failed to dispatch summary generation job", "userID", job.User.ID)
+			}
 		}
 	}
 
 	return nil
 }
 
+func (srv *AggregationService) AggregateDurations(userIds datastructure.Set[string]) (err error) {
+	if err := srv.lockUsers(userIds); err != nil {
+		return err
+	}
+	defer srv.unlockUsers(userIds)
+
+	slog.Info("generating durations", "num_users", len(userIds))
+
+	// Fetch complete user objects
+	var users map[string]*models.User
+	if userIds != nil && !userIds.IsEmpty() {
+		users, err = srv.userService.GetManyMapped(userIds.Values())
+	} else {
+		users, err = srv.userService.GetAllMapped()
+	}
+	if err != nil {
+		return err
+	}
+
+	for _, u := range users {
+		user := &(*u)
+		srv.queueWorkers.Dispatch(func() {
+			srv.durationService.Regenerate(user, true)
+		})
+	}
+
+	return nil
+}
+
 func (srv *AggregationService) process(job AggregationJob) {
-	if summary, err := srv.summaryService.Summarize(job.From, job.To, job.User, nil); err != nil {
-		config.Log().Error("failed to generate summary", "from", job.From, "to", job.To, "userID", job.User.ID, "error", err)
+	// process single summary interval for single user
+	slog.Info("regenerating actual user summaries as part of summary aggregation", "user", job.User.ID, "from", job.From, "to", job.To)
+	if summary, err := srv.summaryService.Summarize(job.From, job.To, job.User, nil, nil); err != nil {
+		config.Log().Error("failed to regenerate summary", "from", job.From, "to", job.To, "userID", job.User.ID, "error", err)
 	} else {
 		slog.Info("successfully generated summary", "from", job.From, "to", job.To, "userID", job.User.ID)
 		if err := srv.summaryService.Insert(summary); err != nil {
@@ -151,7 +190,7 @@ func (srv *AggregationService) process(job AggregationJob) {
 	}
 }
 
-func generateUserJobs(user *models.User, from time.Time, jobs chan<- *AggregationJob) {
+func generateUserJobs(user *models.User, from time.Time) (jobs []*AggregationJob) {
 	var to time.Time
 
 	// Go to next day of either user's first heartbeat or latest aggregation
@@ -174,9 +213,11 @@ func generateUserJobs(user *models.User, from time.Time, jobs chan<- *Aggregatio
 			0, 0, 0, 0,
 			from.Location(),
 		)
-		jobs <- &AggregationJob{user, from, to}
+		jobs = append(jobs, &AggregationJob{user, from, to})
 		from = to
 	}
+
+	return jobs
 }
 
 func (srv *AggregationService) lockUsers(userIds datastructure.Set[string]) error {
